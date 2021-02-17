@@ -1,3 +1,4 @@
+import botocore
 import boto3
 import json
 import datetime
@@ -5,6 +6,7 @@ import time
 import sys
 import argparse
 from colorama import Fore
+from dateutil.tz import tzlocal
 
 REGION = ''
 USER_POOL_ID = ''
@@ -64,7 +66,31 @@ def write_cognito_records_to_file(file_name: str, cognito_records: list) -> bool
         print("Something went wrong while writing to file") 
 """ 
 
-client = boto3.client('cognito-idp', REGION)
+assume_role_cache: dict = {}
+def assumed_role_session(role_arn: str, base_session: botocore.session.Session = None):
+    base_session = base_session or boto3.session.Session()._session
+    print("MFA: ", end='')
+    mfa = input()
+    fetcher = botocore.credentials.AssumeRoleCredentialFetcher(
+        client_creator = base_session.create_client,
+        source_credentials = base_session.get_credentials(),
+        role_arn = role_arn,
+        extra_args = {
+        #    'RoleSessionName': None # set this if you want something non-default
+            'SerialNumber': "arn:aws:iam::051281030351:mfa/Developer_Kenneth",
+            'TokenCode': mfa
+        }
+    )
+    creds = botocore.credentials.DeferredRefreshableCredentials(
+        method = 'assume-role',
+        refresh_using = fetcher.fetch_credentials,
+        time_fetcher = lambda: datetime.datetime.now(tzlocal())
+    )
+    botocore_session = botocore.session.Session()
+    botocore_session._credentials = creds
+    return boto3.Session(botocore_session = botocore_session)
+
+client = boto3.client('cognito-idp', REGION) if USER_POOL_ID != 'us-west-2_2rJZu1pTP' else assumed_role_session('arn:aws:iam::671586277838:role/deploy-amplify').client('cognito-idp', REGION)
 csv_new_line = {REQUIRED_ATTRIBUTE[i]: '' for i in range(len(REQUIRED_ATTRIBUTE))}
 try:
     csv_file = open(CSV_FILE_NAME, 'w')
@@ -94,7 +120,8 @@ while pagination_token is not None:
         print("Error Reason: " + error_message)
         csv_file.close()
         exit()
-    except:
+    except Exception as e:
+        print(e)
         print(Fore.RED + "Something else went wrong")
         csv_file.close()
         exit()     
